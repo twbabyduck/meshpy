@@ -144,7 +144,7 @@ class ImageToMeshConverter:
         upper_bound = np.iinfo(np.uint8).max
         remaining_boundary = boundary_im.data.copy()
         boundary_ind = np.where(remaining_boundary == upper_bound)
-        boundary_coords = zip(boundary_ind[0], boundary_ind[1])
+        boundary_coords = list(zip(boundary_ind[0], boundary_ind[1]))
         if len(boundary_coords) == 0:
             raise ValueError('No boundary coordinates')
 
@@ -190,9 +190,9 @@ class ImageToMeshConverter:
                 # get all possible cadidates from neighboring tris
                 another_visit_avail = False
                 candidate_next_coords = []
-                for i in xrange(num_reffing_tris):
+                for i in range(num_reffing_tris):
                     reffing_tri = tris[ref_tris[i]]
-                    for j in xrange(3):
+                    for j in range(3):
                         v = verts[reffing_tri[j]]
                         if boundary_im[v[0], v[1]] == upper_bound and visited_map[v[0], v[1]] == 0:
                             candidate_next_coords.append([v[0], v[1]])

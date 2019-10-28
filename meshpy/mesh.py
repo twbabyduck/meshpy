@@ -290,7 +290,7 @@ class Mesh3D(object):
             A Mesh3D representation of the mesh's bounding box.
         """
         min_vert, max_vert = self.bounding_box()
-        xs, ys, zs = zip(max_vert, min_vert)
+        xs, ys, zs = list(zip(max_vert, min_vert))
         vertices = []
         for x in xs:
             for y in ys:
@@ -781,7 +781,7 @@ class Mesh3D(object):
             A n_points by 3 ndarray that contains the sampled 3D points.
         """
         probs = self._tri_area_percentages()
-        tri_inds = np.random.choice(range(len(probs)), n_points, p=probs)
+        tri_inds = np.random.choice(list(range(len(probs))), n_points, p=probs)
         points = []
         for tri_ind in tri_inds:
             tri = self.triangles[tri_ind]
@@ -1933,7 +1933,7 @@ class Mesh3D(object):
                 visited.append(c)
                 c = c.children[0]
 
-            if tuple(c.face) not in prob_mapping.keys():
+            if tuple(c.face) not in list(prob_mapping.keys()):
                 prob_mapping[tuple(c.face)] = 0.0
             prob_mapping[tuple(c.face)] += vertex.probability
             vertex.sink = c

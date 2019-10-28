@@ -19,6 +19,7 @@ if version_info[0] != 3:
     range = xrange
 
 class Sdf:
+class Sdf():
     """ Abstract class for signed distance fields.
     """
     __metaclass__ = ABCMeta
