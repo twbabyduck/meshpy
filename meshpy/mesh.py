@@ -920,11 +920,11 @@ class Mesh3D(object):
 
         # propagate probabilities
         cm = self.center_of_mass
-        prob_map = Mesh3D._compute_prob_map(self.face_dag_.nodes.values(), cvh_verts, cm)
+        prob_map = Mesh3D._compute_prob_map(list(self.face_dag_.nodes.values()), cvh_verts, cm)
 
         # compute stable poses
         stable_poses = []
-        for face, p in prob_map.items():
+        for face, p in list(prob_map.items()):
             x0 = cvh_verts[face[0]]
             r = cvh_mesh._compute_basis([cvh_verts[i] for i in face])
             if p > min_prob:
