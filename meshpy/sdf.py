@@ -18,7 +18,6 @@ from sys import version_info
 if version_info[0] != 3:
     range = xrange
 
-class Sdf:
 class Sdf():
     """ Abstract class for signed distance fields.
     """
