@@ -217,24 +217,35 @@ class Sdf3D(Sdf):
     min_coords_z = [0, 1, 2, 4]
     max_coords_z = [3, 5, 6, 7]
 
-    def __init__(self, sdf_data, origin, resolution, use_abs=True, T_sdf_world=RigidTransform(from_frame='sdf', to_frame='world')):
+    def __init__(self, sdf_data, origin, resolution, use_abs=False,
+                 T_sdf_world=RigidTransform(from_frame='sdf', to_frame='world')):
         self.data_ = sdf_data
         self.origin_ = origin
         self.resolution_ = resolution
         self.dims_ = self.data_.shape
 
         # set up surface params
-        self.surface_thresh_ = self.resolution_ * np.sqrt(2) / 2 # resolution is max dist from surface when surf is orthogonal to diagonal grid cells
+        self.surface_thresh_ = self.resolution_ * np.sqrt(2) / 2
+        self.surface_points_ = None
+        self.surface_points_w_ = None
+        self.surface_vals_ = None
+        self._compute_surface_points()
+
+        # resolution is max dist from surface when surf is orthogonal to diagonal grid cells
         spts, _ = self.surface_points()
         self.center_ = 0.5 * (np.min(spts, axis=0) + np.max(spts, axis=0))
         self.points_buf_ = np.zeros([Sdf3D.num_interpolants, 3], dtype=np.int)
-        self.coords_buf_ = np.zeros([3,])
+        self.coords_buf_ = np.zeros([3, ])
         self.pts_ = None
 
         # tranform sdf basis to grid (X and Z axes are flipped!)
         t_world_grid = self.resolution_ * self.center_
         s_world_grid = 1.0 / self.resolution_
-        t_grid_sdf = self.origin / self.resolution
+
+        # FIXME: Since in autolab_core==0.0.4, it applies (un)scale transformation before translation in SimilarityTransform
+        # here we shoule use unscaled origin to get the correct world coordinates
+        # PS: in world coordinate, the origin here is the left-bottom-down corner of the padded bounding squre box
+        t_grid_sdf = self.origin
         self.T_grid_sdf_ = SimilarityTransform(translation=t_grid_sdf,
                                                scale=self.resolution,
                                                from_frame='grid',
@@ -252,6 +263,9 @@ class Sdf3D(Sdf):
             self.data_ = np.abs(self.data_)
 
         self._compute_gradients()
+        self.surface_points_w_ = self.transform_pt_grid_to_obj(self.surface_points_.T).T
+        surface, _ = self.surface_points(grid_basis=True)
+        self.surface_for_signed_val = surface[np.random.choice(len(surface), 1000)]  # FIXME: for speed
 
     def transform(self, delta_T):
         """ Creates a new SDF with a given pose with respect to world coordinates.
@@ -285,43 +299,47 @@ class Sdf3D(Sdf):
         IndexError
             If the coords vector does not have three entries.
         """
-        pass
         if len(coords) != 3:
-            raise IndexError('Indexing must be 3 dimensional') 
+            raise IndexError('Indexing must be 3 dimensional')
         if self.is_out_of_bounds(coords):
             logging.debug('Out of bounds access. Snapping to SDF dims')
+            # find cloest surface point
+            surface = self.surface_for_signed_val
+            closest_surface_coord = surface[np.argmin(np.linalg.norm(surface - coords, axis=-1))]
+            sd = np.linalg.norm(self.transform_pt_grid_to_obj(closest_surface_coord) -
+                                self.transform_pt_grid_to_obj(coords)) + \
+                                self.data_[closest_surface_coord[0], closest_surface_coord[1], closest_surface_coord[2]]
+        else:
+            # snap to grid dims
+            self.coords_buf_[0] = max(0, min(coords[0], self.dims_[0] - 1))
+            self.coords_buf_[1] = max(0, min(coords[1], self.dims_[1] - 1))
+            self.coords_buf_[2] = max(0, min(coords[2], self.dims_[2] - 1))
+            # regular indexing if integers
+            if np.issubdtype(type(coords[0]), np.integer) and \
+               np.issubdtype(type(coords[1]), np.integer) and \
+               np.issubdtype(type(coords[2]), np.integer):
+                return self.data_[int(self.coords_buf_[0]), int(self.coords_buf_[1]), int(self.coords_buf_[2])]
 
-        # snap to grid dims
-        self.coords_buf_[0] = max(0, min(coords[0], self.dims_[0] - 1))
-        self.coords_buf_[1] = max(0, min(coords[1], self.dims_[1] - 1))
-        self.coords_buf_[2] = max(0, min(coords[2], self.dims_[2] - 1))
+            # otherwise interpolate
+            min_coords = np.floor(self.coords_buf_)
+            max_coords = min_coords + 1  # assumed to be on grid
+            self.points_buf_[Sdf3D.min_coords_x, 0] = min_coords[0]
+            self.points_buf_[Sdf3D.max_coords_x, 0] = max_coords[0]
+            self.points_buf_[Sdf3D.min_coords_y, 1] = min_coords[1]
+            self.points_buf_[Sdf3D.max_coords_y, 1] = max_coords[1]
+            self.points_buf_[Sdf3D.min_coords_z, 2] = min_coords[2]
+            self.points_buf_[Sdf3D.max_coords_z, 2] = max_coords[2]
 
-        # regular indexing if integers
-        if np.issubdtype(type(coords[0]), np.integer) and \
-           np.issubdtype(type(coords[1]), np.integer) and \
-           np.issubdtype(type(coords[2]), np.integer):
-            return self.data_[int(self.coords_buf_[0]), int(self.coords_buf_[1]), int(self.coords_buf_[2])]
-
-        # otherwise interpolate
-        min_coords = np.floor(self.coords_buf_)
-        max_coords = min_coords + 1 # assumed to be on grid
-        self.points_buf_[Sdf3D.min_coords_x, 0] = min_coords[0]
-        self.points_buf_[Sdf3D.max_coords_x, 0] = max_coords[0]
-        self.points_buf_[Sdf3D.min_coords_y, 1] = min_coords[1]
-        self.points_buf_[Sdf3D.max_coords_y, 1] = max_coords[1]
-        self.points_buf_[Sdf3D.min_coords_z, 2] = min_coords[2]
-        self.points_buf_[Sdf3D.max_coords_z, 2] = max_coords[2]
-
-        # bilinearly interpolate points
-        sd = 0.0
-        for i in range(Sdf3D.num_interpolants):
-            p = self.points_buf_[i,:]
-            if self.is_out_of_bounds(p):
-                v = 0.0
-            else:
-                v = self.data_[p[0], p[1], p[2]]
-            w = np.prod(-np.abs(p - self.coords_buf_) + 1)
-            sd = sd + w * v
+            # bilinearly interpolate points
+            sd = 0.0
+            for i in range(Sdf3D.num_interpolants):
+                p = self.points_buf_[i, :]
+                if self.is_out_of_bounds(p):
+                    v = 0.0
+                else:
+                    v = self.data_[p[0], p[1], p[2]]
+                w = np.prod(-np.abs(p - self.coords_buf_) + 1)
+                sd = sd + w * v
 
         return sd
 
@@ -421,17 +439,17 @@ class Sdf3D(Sdf):
         ---------
         coords : numpy 3-vector
             the grid coordinates at which to get the curvature
-
+        delta :
         Returns
         -------
         curvature : 3x3 ndarray of the curvature at the surface points
         """
         # perturb local coords
-        coords_x_up   = coords + np.array([delta, 0, 0])
+        coords_x_up = coords + np.array([delta, 0, 0])
         coords_x_down = coords + np.array([-delta, 0, 0])
-        coords_y_up   = coords + np.array([0, delta, 0])
+        coords_y_up = coords + np.array([0, delta, 0])
         coords_y_down = coords + np.array([0, -delta, 0])
-        coords_z_up   = coords + np.array([0, 0, delta])
+        coords_z_up = coords + np.array([0, 0, delta])
         coords_z_down = coords + np.array([0, 0, -delta])
 
         # get gradient
@@ -482,15 +500,15 @@ class Sdf3D(Sdf):
             logging.debug('Out of bounds access. Snapping to SDF dims')
 
         # snap to grid dims
-        coords[0] = max(0, min(coords[0], self.dims_[0] - 1))
-        coords[1] = max(0, min(coords[1], self.dims_[1] - 1))
-        coords[2] = max(0, min(coords[2], self.dims_[2] - 1))
+        # coords[0] = max(0, min(coords[0], self.dims_[0] - 1))
+        # coords[1] = max(0, min(coords[1], self.dims_[1] - 1))
+        # coords[2] = max(0, min(coords[2], self.dims_[2] - 1))
         index_coords = np.zeros(3)
 
         # check points on surface
         sdf_val = self[coords]
         if np.abs(sdf_val) >= self.surface_thresh_:
-            logging.warning('Cannot compute normal. Point must be on surface')
+            logging.debug('Cannot compute normal. Point must be on surface')
             return None
 
         # collect all surface points within the delta sphere
@@ -516,16 +534,30 @@ class Sdf3D(Sdf):
             dx += delta
 
         # fit a plane to the surface points
-        X.sort(key = lambda x: x[3])
-        X = np.array(X)[:,:3]
+        X.sort(key=lambda x: x[3])
+        X = np.array(X)[:, :3]
         A = X - np.mean(X, axis=0)
         try:
             U, S, V = np.linalg.svd(A.T)
-            n = U[:,2]
+            n = U[:, 2]
         except:
             logging.warning('Tangent plane does not exist. Returning None.')
             return None
+        # make sure surface normal is outward
+        # referenced from Zhou Xian's github, but if the model is not watertight, this method may fail
+        # https://github.com/zhouxian/meshpy_berkeley/commit/96428f3b7af618a0828a7eb88f22541cdafacfc7
+        if self[coords + n * 0.01] < self[coords]:
+            n = -n
         return n
+
+    def _compute_surface_points(self):
+        surface_points = np.where(np.abs(self.data_) < self.surface_thresh_)
+        x = surface_points[0]
+        y = surface_points[1]
+        z = surface_points[2]
+        self.surface_points_ = np.c_[x, np.c_[y, z]]
+        self.surface_vals_ = self.data_[self.surface_points_[:, 0], self.surface_points_[:, 1],
+                                        self.surface_points_[:, 2]]
 
     def surface_points(self, grid_basis=True):
         """Returns the points on the surface.
@@ -541,17 +573,9 @@ class Sdf3D(Sdf):
         :obj:`tuple` of :obj:`numpy.ndarray` of int, :obj:`numpy.ndarray` of float
             The points on the surface and the signed distances at those points.
         """
-        surface_points = np.where(np.abs(self.data_) < self.surface_thresh_)
-        x = surface_points[0]
-        y = surface_points[1]
-        z = surface_points[2]
-        surface_points = np.c_[x, np.c_[y, z]]
-        surface_vals = self.data_[surface_points[:,0], surface_points[:,1], surface_points[:,2]]
         if not grid_basis:
-            surface_points = self.transform_pt_grid_to_obj(surface_points.T)
-            surface_points = surface_points.T
-
-        return surface_points, surface_vals
+            return self.surface_points_w_, self.surface_vals_
+        return self.surface_points_, self.surface_vals_
 
     def rescale(self, scale):
         """ Rescale an SDF by a given scale factor.
@@ -730,7 +754,7 @@ class Sdf3D(Sdf):
         possible_t = np.roots(w)
         t_zc = None
         for i in range(possible_t.shape[0]):
-            if possible_t[i] >= 0 and possible_t[i] <= 10 and not np.iscomplex(possible_t[i]):
+            if 0 <= possible_t[i] <= 10 and not np.iscomplex(possible_t[i]):
                 t_zc = possible_t[i]
 
         # if no positive roots find min
